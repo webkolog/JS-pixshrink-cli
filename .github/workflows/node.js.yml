@@ -1,0 +1,88 @@
+name: Node.js CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+
+    steps:
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
+
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+
+    - name: Install System Dependencies for Sharp
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libvips-dev
+
+    - name: Install Dependencies
+      run: npm ci
+
+    - name: Create Valid Mock Images via Sharp
+      run: |
+        mkdir -p test-images
+
+        node -e "
+        const sharp = require('sharp');
+        const fs = require('fs');
+        
+        async function createImages() {
+          // 10x10 piksellik kırmızı bir JPEG oluştur
+          await sharp({
+            create: { width: 10, height: 10, channels: 3, background: { r: 255, g: 0, b: 0 } }
+          }).jpeg().toFile('test-images/photo1.jpg');
+          
+          // 10x10 piksellik mavi bir PNG oluştur
+          await sharp({
+            create: { width: 10, height: 10, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 1 } }
+          }).png().toFile('test-images/photo2.png');
+          
+          // Yok sayılması gereken düz metin dosyası
+          fs.writeFileSync('test-images/document.txt', 'This should be ignored');
+        }
+        
+        createImages().catch(err => {
+          console.error(err);
+          process.exit(1);
+        });
+        "
+
+    - name: Run CLI Smoke Test
+      run: |
+        node index.js ./test-images --quality 75
+
+    - name: Verify Optimization Output
+      run: |
+        ls -la test-images
+        if [ ! -d "test-images/optimized" ]; then
+          echo "Hata: 'optimized' klasörü oluşturulamadı!"
+          exit 1
+        fi
+        
+        ls -la test-images/optimized
+        
+        if [ ! -f "test-images/optimized/photo1.webp" ] || [ ! -f "test-images/optimized/photo2.webp" ]; then
+          echo "Hata: WebP görselleri başarıyla üretilemedi!"
+          exit 1
+        fi
+        
+        if [ -f "test-images/optimized/document.webp" ]; then
+          echo "Hata: TXT dosyası dönüştürülmemeliydi!"
+          exit 1
+        fi
+        
+        echo "Tüm testler başarıyla geçti! 🎉"
